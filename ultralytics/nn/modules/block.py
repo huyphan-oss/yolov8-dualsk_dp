@@ -2122,48 +2122,54 @@ class DualPathSKBlock(nn.Module):
         p2 = self.path2(x)
         return self.fuse(torch.cat((p1, p2), dim=1))
 
-class EMA(nn.Module):
-    def __init__(self, channels, factor=32):
-        super(EMA, self).__init__()
-        self.groups = factor
-        assert channels // self.groups > 0
-        self.softmax = nn.Softmax(dim=-1)
-        self.agp = nn.AdaptiveAvgPool2d((1, 1))
-        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
-        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-        self.gn = nn.GroupNorm(channels // self.groups, channels // self.groups)
-        self.conv1x1 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=1, stride=1, padding=0)
-        self.conv3x3 = nn.Conv2d(channels // self.groups, channels // self.groups, kernel_size=3, stride=1, padding=1)
+# --- COPY VÀO CUỐI FILE block.py ---
+class SpatialGate(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.cv = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
+        self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
-        b, c, h, w = x.size()
-        group_x = x.view(b * self.groups, -1, h, w)  # b*g, c//g, h, w
-        x_h = self.pool_h(group_x)
-        x_w = self.pool_w(group_x).permute(0, 1, 3, 2)
-        hw_avg = torch.cat([x_h, x_w], dim=2)
-        group_mag_conv = self.conv1x1(hw_avg)
-        h_sig, w_sig = torch.split(group_mag_conv, [h, w], dim=2)
-        group_x = group_x * h_sig.sigmoid() * w_sig.permute(0, 1, 3, 2).sigmoid()
-        
-        x_channels_wise = self.agp(group_x)
-        x_spatial_wise = self.conv3x3(group_x)
-        weights = self.softmax((x_channels_wise * x_spatial_wise).view(b * self.groups, -1, h * w))
-        out = (weights.view(b * self.groups, -1, h, w) * group_x).view(b, c, h, w)
-        return out
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        out = torch.cat([avg_out, max_out], dim=1)
+        return x * self.sigmoid(self.cv(out))
 
-class C2f_EMA(nn.Module):
+class SKConv_Precision(nn.Module):
+    def __init__(self, features, r=4, L=32):
+        super().__init__()
+        d = max(int(features / r), L)
+        self.M = 2
+        self.convs = nn.ModuleList([
+            nn.Sequential(nn.Conv2d(features, features, 3, padding=1+i, dilation=1+i, groups=features, bias=False),
+                          nn.BatchNorm2d(features), nn.SiLU()) for i in range(self.M)
+        ])
+        self.gap = nn.AdaptiveAvgPool2d(1)
+        self.gmp = nn.AdaptiveMaxPool2d(1)
+        self.fc = nn.Sequential(nn.Conv2d(features, d, 1, bias=False), nn.BatchNorm2d(d), nn.SiLU())
+        self.fcs = nn.ModuleList([nn.Conv2d(d, features, 1) for _ in range(self.M)])
+        self.softmax = nn.Softmax(dim=1)
+
+    def forward(self, x):
+        feats = torch.stack([conv(x) for conv in self.convs], dim=1)
+        fea_sum = torch.sum(feats, dim=1)
+        fea_z = self.fc(self.gap(fea_sum) + self.gmp(fea_sum))
+        attention = self.softmax(torch.stack([fc(fea_z) for fc in self.fcs], dim=1))
+        return torch.sum(feats * attention, dim=1)
+
+class C2f_DualSK(nn.Module):
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
-        self.cv1 = Conv(c1, 2 * self.c, 1, 1)
-        self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(Bottleneck(self.c, self.c, shortcut, g, k=(3, 3), e=1.0) for _ in range(n))
-        self.ema = EMA(c2)
+        self.cv1 = nn.Sequential(nn.Conv2d(c1, 2 * self.c, 1, 1), nn.BatchNorm2d(2 * self.c), nn.SiLU())
+        self.cv2 = nn.Sequential(nn.Conv2d((2 + n) * self.c, c2, 1, 1), nn.BatchNorm2d(c2), nn.SiLU())
+        self.m = nn.ModuleList(SKConv_Precision(self.c) for _ in range(n))
+        self.sa = SpatialGate()
 
     def forward(self, x):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
-        return self.ema(self.cv2(torch.cat(y, 1)))
+        return self.sa(self.cv2(torch.cat(y, 1)))
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================

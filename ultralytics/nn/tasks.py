@@ -72,7 +72,7 @@ from ultralytics.nn.modules import (
     YOLOESegment,
     YOLOESegment26,
     v10Detect,
-    C2f_EMA
+    C2f_DualSK
 )
 from ultralytics.utils import DEFAULT_CFG_DICT, LOGGER, WINDOWS, YAML, colorstr, emojis
 from ultralytics.utils.checks import check_requirements, check_suffix, check_yaml
@@ -1591,7 +1591,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
-            C2f_EMA,
+            C2f_DualSK,
             C3k2,
             RepNCSPELAN4,
             ELAN1,
@@ -1618,7 +1618,7 @@ def parse_model(d, ch, verbose=True):
             C1,
             C2,
             C2f,
-            C2f_EMA,
+            C2f_DualSK,
             C3k2,
             C2fAttn,
             C3,
