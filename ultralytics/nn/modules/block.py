@@ -2066,55 +2066,51 @@ class RealNVP(nn.Module):
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
 
+
 # ==========================================
 # THÊM MODULE DUAL-SK TỪ ĐÂY
 # ==========================================
-#import math
+# import math
 import torch
 import torch.nn as nn
 
+
 class SKConv(nn.Module):
-    """Selective Kernel Convolution - Tự động điều chỉnh Receptive Field"""
+    """Selective Kernel Convolution - Tự động điều chỉnh Receptive Field."""
+
     def __init__(self, c1, M=2, r=16, L=32):
         super().__init__()
         d = max(int(c1 / r), L)
         self.M = M
         self.c1 = c1
-        
-        self.convs = nn.ModuleList([
-            Conv(c1, c1, k=3, s=1, p=1+i, d=1+i, g=c1) for i in range(M)
-        ])
-        
+
+        self.convs = nn.ModuleList([Conv(c1, c1, k=3, s=1, p=1 + i, d=1 + i, g=c1) for i in range(M)])
+
         self.gap = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Conv2d(c1, d, kernel_size=1, bias=False),
-            nn.BatchNorm2d(d),
-            nn.SiLU()
-        )
+        self.fc = nn.Sequential(nn.Conv2d(c1, d, kernel_size=1, bias=False), nn.BatchNorm2d(d), nn.SiLU())
         self.fcs = nn.ModuleList([nn.Conv2d(d, c1, kernel_size=1) for _ in range(M)])
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, x):
-        feats = torch.stack([conv(x) for conv in self.convs], dim=1) 
-        U = torch.sum(feats, dim=1) 
-        S = self.gap(U) 
-        Z = self.fc(S) 
-        
-        attention_vectors = torch.stack([fc(Z) for fc in self.fcs], dim=1) 
+        feats = torch.stack([conv(x) for conv in self.convs], dim=1)
+        U = torch.sum(feats, dim=1)
+        S = self.gap(U)
+        Z = self.fc(S)
+
+        attention_vectors = torch.stack([fc(Z) for fc in self.fcs], dim=1)
         attention_vectors = self.softmax(attention_vectors)
-        V = torch.sum(feats * attention_vectors, dim=1) 
+        V = torch.sum(feats * attention_vectors, dim=1)
         return V
 
+
 class DualPathSKBlock(nn.Module):
-    """Khối luồng kép: Luồng không gian (Spatial) + Luồng ngữ cảnh (Context)"""
+    """Khối luồng kép: Luồng không gian (Spatial) + Luồng ngữ cảnh (Context)."""
+
     def __init__(self, c1, c2):
         super().__init__()
         c_ = c2 // 2
         self.path1 = Conv(c1, c_, k=3)
-        self.path2 = nn.Sequential(
-            Conv(c1, c_, k=1),
-            SKConv(c_)
-        )
+        self.path2 = nn.Sequential(Conv(c1, c_, k=1), SKConv(c_))
         self.fuse = Conv(c2, c2, k=1)
 
     def forward(self, x):
@@ -2122,9 +2118,11 @@ class DualPathSKBlock(nn.Module):
         p2 = self.path2(x)
         return self.fuse(torch.cat((p1, p2), dim=1))
 
+
 # --- COPY VÀO CUỐI FILE block.py ---
 import torch
 import torch.nn as nn
+
 
 class LSSKBlock(nn.Module):
     def __init__(self, c1, c2, r=4):
@@ -2133,15 +2131,13 @@ class LSSKBlock(nn.Module):
         self.sk1 = nn.Conv2d(c1, c2, kernel_size=3, padding=1)
         self.sk2 = nn.Conv2d(c1, c2, kernel_size=5, padding=2)
         self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(c2, d), nn.ReLU(inplace=True),
-            nn.Linear(d, c2 * 2), nn.Softmax(dim=1)
-        )
+        self.fc = nn.Sequential(nn.Linear(c2, d), nn.ReLU(inplace=True), nn.Linear(d, c2 * 2), nn.Softmax(dim=1))
 
     def forward(self, x):
         feat1, feat2 = self.sk1(x), self.sk2(x)
         weights = self.fc(self.avg_pool(feat1 + feat2).view(x.size(0), -1)).view(x.size(0), 2, x.size(1), 1, 1)
         return feat1 * weights[:, 0] + feat2 * weights[:, 1]
+
 
 class C2f_DualSK(nn.Module):
     def __init__(self, c1, c2, n=1, e=0.5):
@@ -2156,15 +2152,19 @@ class C2f_DualSK(nn.Module):
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
 
+
 class GhostConv(nn.Module):
     def __init__(self, c1, c2, k=1, s=1):
         super().__init__()
         c_ = c2 // 2
         self.cv1 = Conv(c1, c_, k, s)
         self.cv2 = Conv(c_, c_, 3, 1, 1)
+
     def forward(self, x):
         y = self.cv1(x)
         return torch.cat((y, self.cv2(y)), 1)
+
+
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
