@@ -2069,60 +2069,6 @@ class RealNVP(nn.Module):
 # ==========================================
 # THÊM MODULE DUAL-SK TỪ ĐÂY
 # ==========================================
-#import math
-import torch
-import torch.nn as nn
-
-class SKConv(nn.Module):
-    """Selective Kernel Convolution - Tự động điều chỉnh Receptive Field"""
-    def __init__(self, c1, M=2, r=16, L=32):
-        super().__init__()
-        d = max(int(c1 / r), L)
-        self.M = M
-        self.c1 = c1
-        
-        self.convs = nn.ModuleList([
-            Conv(c1, c1, k=3, s=1, p=1+i, d=1+i, g=c1) for i in range(M)
-        ])
-        
-        self.gap = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Conv2d(c1, d, kernel_size=1, bias=False),
-            nn.BatchNorm2d(d),
-            nn.SiLU()
-        )
-        self.fcs = nn.ModuleList([nn.Conv2d(d, c1, kernel_size=1) for _ in range(M)])
-        self.softmax = nn.Softmax(dim=1)
-
-    def forward(self, x):
-        feats = torch.stack([conv(x) for conv in self.convs], dim=1) 
-        U = torch.sum(feats, dim=1) 
-        S = self.gap(U) 
-        Z = self.fc(S) 
-        
-        attention_vectors = torch.stack([fc(Z) for fc in self.fcs], dim=1) 
-        attention_vectors = self.softmax(attention_vectors)
-        V = torch.sum(feats * attention_vectors, dim=1) 
-        return V
-
-class DualPathSKBlock(nn.Module):
-    """Khối luồng kép: Luồng không gian (Spatial) + Luồng ngữ cảnh (Context)"""
-    def __init__(self, c1, c2):
-        super().__init__()
-        c_ = c2 // 2
-        self.path1 = Conv(c1, c_, k=3)
-        self.path2 = nn.Sequential(
-            Conv(c1, c_, k=1),
-            SKConv(c_)
-        )
-        self.fuse = Conv(c2, c2, k=1)
-
-    def forward(self, x):
-        p1 = self.path1(x)
-        p2 = self.path2(x)
-        return self.fuse(torch.cat((p1, p2), dim=1))
-
-# --- COPY VÀO CUỐI FILE block.py ---
 import torch
 import torch.nn as nn
 from .conv import Conv, GhostConv
