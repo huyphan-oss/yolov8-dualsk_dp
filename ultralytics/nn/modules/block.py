@@ -2125,46 +2125,42 @@ class DualPathSKBlock(nn.Module):
 # --- COPY VÀO CUỐI FILE block.py ---
 import torch
 import torch.nn as nn
+from .conv import Conv, GhostConv
 
-class LSSKBlock(nn.Module):
-    def __init__(self, c1, c2, r=4):
+class DualSKBlock(nn.Module):
+    """Cải tiến Precision bằng cách chọn lọc đặc trưng qua 2 Kernel khác nhau (3x3 và 5x5)"""
+    def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
         super().__init__()
-        d = max(c2 // r, 32)
-        self.sk1 = nn.Conv2d(c1, c2, kernel_size=3, padding=1)
-        self.sk2 = nn.Conv2d(c1, c2, kernel_size=5, padding=2)
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Linear(c2, d), nn.ReLU(inplace=True),
-            nn.Linear(d, c2 * 2), nn.Softmax(dim=1)
-        )
+        c_ = int(c2 * e)
+        # Nhánh 1: GhostConv 3x3 để giữ đặc trưng cơ bản
+        self.cv1 = GhostConv(c1, c_, 3, 1) 
+        # Nhánh 2: Chọn lọc đặc trưng (Dual Path)
+        self.sk_conv1 = nn.Conv2d(c_, c_, 3, padding=1, groups=c_)
+        self.sk_conv2 = nn.Conv2d(c_, c_, 5, padding=2, groups=c_)
+        self.cv2 = Conv(c_ * 2, c2, 1, 1)
+        self.add = shortcut and c1 == c2
 
     def forward(self, x):
-        feat1, feat2 = self.sk1(x), self.sk2(x)
-        weights = self.fc(self.avg_pool(feat1 + feat2).view(x.size(0), -1)).view(x.size(0), 2, x.size(1), 1, 1)
-        return feat1 * weights[:, 0] + feat2 * weights[:, 1]
+        x1 = self.cv1(x)
+        # Dual Path: trích xuất đa quy mô để lọc nhiễu UAV
+        out1 = self.sk_conv1(x1)
+        out2 = self.sk_conv2(x1)
+        out = self.cv2(torch.cat([out1, out2], 1))
+        return x + out if self.add else out
 
-class C2f_DualSK(nn.Module):
-    def __init__(self, c1, c2, n=1, e=0.5):
+class C2f_Ghost_DualSK(nn.Module):
+    """Thay thế C2f gốc bằng phiên bản Ghost + DualSK để tăng P và FPS"""
+    def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
         self.cv1 = Conv(c1, 2 * self.c, 1, 1)
         self.cv2 = Conv((2 + n) * self.c, c2, 1)
-        self.m = nn.ModuleList(LSSKBlock(self.c, self.c) for _ in range(n))
+        self.m = nn.ModuleList(DualSKBlock(self.c, self.c, shortcut, g, e=1.0) for _ in range(n))
 
     def forward(self, x):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
-
-class GhostConv(nn.Module):
-    def __init__(self, c1, c2, k=1, s=1):
-        super().__init__()
-        c_ = c2 // 2
-        self.cv1 = Conv(c1, c_, k, s)
-        self.cv2 = Conv(c_, c_, 3, 1, 1)
-    def forward(self, x):
-        y = self.cv1(x)
-        return torch.cat((y, self.cv2(y)), 1)
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
