@@ -187,5 +187,5 @@ __all__ = (
     "YOLOEDetect",
     "YOLOESegment",
     "YOLOESegment26",
-    "v10Detect"
+    "v10Detect",
 )
