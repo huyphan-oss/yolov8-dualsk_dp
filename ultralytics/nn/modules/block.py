@@ -2066,20 +2066,22 @@ class RealNVP(nn.Module):
         z, log_det = self.backward_p(x)
         return self.prior.log_prob(z) + log_det
 
+
 # ==========================================
 # THÊM MODULE DUAL-SK TỪ ĐÂY
 # ==========================================
 import torch
 import torch.nn as nn
-from .conv import Conv, GhostConv
+
 
 class DualSKBlock(nn.Module):
-    """Cải tiến Precision bằng cách chọn lọc đặc trưng qua 2 Kernel khác nhau (3x3 và 5x5)"""
+    """Cải tiến Precision bằng cách chọn lọc đặc trưng qua 2 Kernel khác nhau (3x3 và 5x5)."""
+
     def __init__(self, c1, c2, shortcut=True, g=1, e=0.5):
         super().__init__()
         c_ = int(c2 * e)
         # Nhánh 1: GhostConv 3x3 để giữ đặc trưng cơ bản
-        self.cv1 = GhostConv(c1, c_, 3, 1) 
+        self.cv1 = GhostConv(c1, c_, 3, 1)
         # Nhánh 2: Chọn lọc đặc trưng (Dual Path)
         self.sk_conv1 = nn.Conv2d(c_, c_, 3, padding=1, groups=c_)
         self.sk_conv2 = nn.Conv2d(c_, c_, 5, padding=2, groups=c_)
@@ -2094,8 +2096,10 @@ class DualSKBlock(nn.Module):
         out = self.cv2(torch.cat([out1, out2], 1))
         return x + out if self.add else out
 
+
 class C2f_Ghost_DualSK(nn.Module):
-    """Thay thế C2f gốc bằng phiên bản Ghost + DualSK để tăng P và FPS"""
+    """Thay thế C2f gốc bằng phiên bản Ghost + DualSK để tăng P và FPS."""
+
     def __init__(self, c1, c2, n=1, shortcut=False, g=1, e=0.5):
         super().__init__()
         self.c = int(c2 * e)
@@ -2107,6 +2111,8 @@ class C2f_Ghost_DualSK(nn.Module):
         y = list(self.cv1(x).chunk(2, 1))
         y.extend(m(y[-1]) for m in self.m)
         return self.cv2(torch.cat(y, 1))
+
+
 # ==========================================
 # KẾT THÚC MODULE DUAL-SK
 # ==========================================
